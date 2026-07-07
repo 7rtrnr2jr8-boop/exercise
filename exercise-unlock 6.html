@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動いて解除</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+JP:wght@300;400;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d0d0f; --surface: #16161a; --border: #2a2a30;
+    --accent: #b8ff4f; --accent-dim: rgba(184,255,79,0.12);
+    --text: #e8e8ec; --muted: #6b6b78; --danger: #ff6b6b;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Noto Sans JP', sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; overflow-x: hidden;
+  }
+  #locked-screen { display: flex; flex-direction: column; align-items: center; gap: 32px; text-align: center; max-width: 380px; width: 100%; }
+  .lock-icon { width: 80px; height: 80px; border: 2px solid var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; animation: pulse-border 2s ease-in-out infinite; }
+  @keyframes pulse-border { 0%,100%{border-color:var(--border);box-shadow:none}50%{border-color:var(--danger);box-shadow:0 0 20px rgba(255,107,107,0.2)} }
+  .idle-label { font-family:'DM Mono',monospace; font-size:11px; letter-spacing:0.2em; color:var(--danger); text-transform:uppercase; }
+  .idle-time { font-family:'DM Mono',monospace; font-size:48px; font-weight:500; color:var(--text); line-height:1; }
+  .idle-sub { font-size:13px; color:var(--muted); line-height:1.6; }
+  .exercise-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px; width:100%; text-align:left; }
+  .exercise-label { font-family:'DM Mono',monospace; font-size:10px; letter-spacing:0.15em; color:var(--muted); text-transform:uppercase; margin-bottom:8px; }
+  .exercise-name { font-size:20px; font-weight:700; color:var(--accent); margin-bottom:4px; }
+  .exercise-desc { font-size:13px; color:var(--muted); line-height:1.5; }
+  .exercise-emoji { font-size:32px; margin-bottom:8px; }
+  .start-btn { background:var(--accent); color:#0d0d0f; border:none; border-radius:12px; padding:16px 32px; font-size:15px; font-weight:700; font-family:'Noto Sans JP',sans-serif; cursor:pointer; width:100%; transition:opacity 0.15s,transform 0.1s; letter-spacing:0.02em; }
+  .start-btn:hover{opacity:0.9;transform:translateY(-1px)} .start-btn:active{transform:translateY(0)}
+  #camera-screen { display:none; flex-direction:column; align-items:center; gap:20px; width:100%; max-width:520px; }
+  .camera-header { display:flex; align-items:center; justify-content:space-between; width:100%; }
+  .camera-title { font-family:'DM Mono',monospace; font-size:12px; letter-spacing:0.15em; color:var(--muted); text-transform:uppercase; }
+  .rep-counter { font-family:'DM Mono',monospace; font-size:13px; color:var(--accent); background:var(--accent-dim); border:1px solid rgba(184,255,79,0.25); border-radius:8px; padding:4px 12px; }
+  .video-wrapper { position:relative; width:100%; border-radius:16px; overflow:hidden; background:var(--surface); border:1px solid var(--border); aspect-ratio:4/3; }
+  #video { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:0; }
+  #canvas { position:absolute; top:0; left:0; width:100%; height:100%; transform:scaleX(-1); }
+  .loading-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:var(--surface); }
+  .spinner { width:32px; height:32px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loading-text { font-family:'DM Mono',monospace; font-size:11px; color:var(--muted); letter-spacing:0.1em; }
+  .exercise-banner { width:100%; background:var(--surface); border:1px solid rgba(184,255,79,0.3); border-radius:12px; padding:14px 18px; display:flex; align-items:center; gap:12px; }
+  .exercise-banner-emoji { font-size:24px; }
+  .exercise-banner-text { flex:1; }
+  .exercise-banner-name { font-size:15px; font-weight:700; color:var(--accent); }
+  .exercise-banner-desc { font-size:12px; color:var(--muted); margin-top:2px; }
+  .feedback-bar { width:100%; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 20px; display:flex; align-items:center; gap:14px; min-height:64px; transition:border-color 0.3s,background 0.3s; }
+  .feedback-bar.good { border-color:rgba(184,255,79,0.4); background:rgba(184,255,79,0.05); }
+  .feedback-bar.bad { border-color:rgba(255,107,107,0.3); }
+  .feedback-dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex-shrink:0; transition:background 0.2s; }
+  .feedback-bar.good .feedback-dot{background:var(--accent)} .feedback-bar.bad .feedback-dot{background:var(--danger)}
+  .feedback-text { font-size:14px; color:var(--text); line-height:1.4; }
+  .progress-wrap { width:100%; display:flex; flex-direction:column; gap:8px; }
+  .progress-labels { display:flex; justify-content:space-between; font-family:'DM Mono',monospace; font-size:11px; color:var(--muted); }
+  .progress-track { width:100%; height:6px; background:var(--border); border-radius:99px; overflow:hidden; }
+  .progress-fill { height:100%; background:var(--accent); border-radius:99px; width:0%; transition:width 0.4s ease; }
+  #unlocked-screen { display:none; flex-direction:column; align-items:center; gap:24px; text-align:center; max-width:360px; }
+  .unlock-ring { width:96px; height:96px; border:2px solid var(--accent); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:36px; box-shadow:0 0 40px rgba(184,255,79,0.25); animation:unlock-glow 1s ease-out; }
+  @keyframes unlock-glow{0%{box-shadow:0 0 0px rgba(184,255,79,0);transform:scale(0.8);opacity:0}60%{box-shadow:0 0 60px rgba(184,255,79,0.5);transform:scale(1.05)}100%{box-shadow:0 0 40px rgba(184,255,79,0.25);transform:scale(1);opacity:1}}
+  .unlock-title { font-size:24px; font-weight:700; color:var(--accent); }
+  .unlock-sub { font-size:14px; color:var(--muted); line-height:1.6; }
+  .reset-btn { background:transparent; color:var(--muted); border:1px solid var(--border); border-radius:10px; padding:12px 24px; font-size:13px; font-family:'Noto Sans JP',sans-serif; cursor:pointer; transition:border-color 0.2s,color 0.2s; }
+  .reset-btn:hover{border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+
+<div id="locked-screen">
+  <div class="lock-icon">🔒</div>
+  <div>
+    <div class="idle-label">静止時間</div>
+    <div class="idle-time" id="idle-display">45:00</div>
+  </div>
+  <p class="idle-sub">長時間座ったままです。<br>エクササイズをクリアするまで<br>このロックは解除されません。</p>
+  <div class="exercise-card">
+    <div class="exercise-label">今日のエクササイズ</div>
+    <div class="exercise-emoji" id="locked-emoji">💪</div>
+    <div class="exercise-name" id="locked-name">読み込み中...</div>
+    <div class="exercise-desc" id="locked-desc"></div>
+  </div>
+  <button class="start-btn" onclick="startCamera()">カメラを起動して始める</button>
+</div>
+
+<div id="camera-screen">
+  <div class="camera-header">
+    <span class="camera-title">姿勢を検出中</span>
+    <span class="rep-counter" id="rep-display">0 / 10 回</span>
+  </div>
+  <div class="video-wrapper">
+    <video id="video" playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div class="loading-overlay" id="loading-overlay">
+      <div class="spinner"></div>
+      <div class="loading-text">カメラを準備中...</div>
+    </div>
+  </div>
+  <div class="exercise-banner">
+    <div class="exercise-banner-emoji" id="banner-emoji">💪</div>
+    <div class="exercise-banner-text">
+      <div class="exercise-banner-name" id="banner-name"></div>
+      <div class="exercise-banner-desc" id="banner-desc"></div>
+    </div>
+  </div>
+  <div class="feedback-bar" id="feedback-bar">
+    <div class="feedback-dot"></div>
+    <div class="feedback-text" id="feedback-text">全身がカメラに映るよう少し離れてください</div>
+  </div>
+  <div class="progress-wrap">
+    <div class="progress-labels">
+      <span>進捗</span>
+      <span id="progress-label">0 / 10</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+  </div>
+</div>
+
+<div id="unlocked-screen">
+  <div class="unlock-ring">✓</div>
+  <div class="unlock-title">解除されました</div>
+  <p class="unlock-sub" id="unlock-msg">エクササイズを完了しました。<br>体を動かしてリフレッシュできましたか？<br>また長時間座り続けたらお知らせします。</p>
+  <button class="reset-btn" onclick="resetApp()">もう一度テストする</button>
+</div>
+
+<script>
+const TARGET_REPS = 10;
+let reps = 0;
+let poseReady = false;
+let camera = null;
+let currentExercise = null;
+let exerciseState = {};
+
+// ── EXERCISE DETECTION FUNCTIONS ──
+
+function detectArmsUp(lm, state) {
+  const ls = lm[11], rs = lm[12], lw = lm[15], rw = lm[16];
+  if (!ls||!rs||!lw||!rw) return {feedback:'上半身が見えるよう離れてください', good:false};
+  if (ls.visibility<0.5||rs.visibility<0.5||lw.visibility<0.5||rw.visibility<0.5)
+    return {feedback:'両腕がカメラに映るよう正面を向いてください', good:false};
+  const bothUp = lw.y < ls.y - 0.10 && rw.y < rs.y - 0.10;
+  if (bothUp && !state.up) { state.up = true; return {feedback:'✓ 腕が上がっています！下ろしてください', good:true, setState:state}; }
+  if (!bothUp && state.up) { state.up = false; return {feedback:'もう一度！腕を上げてください', good:false, counted:true, setState:state}; }
+  if (bothUp) return {feedback:'✓ 腕が上がっています！下ろしてください', good:true};
+  return {feedback:'両腕を頭上にまっすぐ上げてください', good:false};
+}
+
+function detectSquat(lm, state) {
+  const lh = lm[23], rh = lm[24], lk = lm[25], rk = lm[26];
+  if (!lh||!rh||!lk||!rk) return {feedback:'全身が映るよう離れてください', good:false};
+  if (lh.visibility<0.4||rh.visibility<0.4||lk.visibility<0.4||rk.visibility<0.4)
+    return {feedback:'全身がカメラに映るよう調整してください', good:false};
+  // 膝がヒップより下かつ近い＝スクワット姿勢
+  const kneeHipDiff = ((lk.y - lh.y) + (rk.y - rh.y)) / 2;
+  const isDown = kneeHipDiff < 0.10; // 膝とヒップが近い＝しゃがんでる
+  if (isDown && !state.down) { state.down = true; return {feedback:'✓ しゃがめています！立ち上がってください', good:true, setState:state}; }
+  if (!isDown && state.down) { state.down = false; return {feedback:'もう一度！膝を曲げてください', good:false, counted:true, setState:state}; }
+  if (isDown) return {feedback:'✓ しゃがめています！立ち上がってください', good:true};
+  return {feedback:'膝を曲げて腰を落としてください', good:false};
+}
+
+function detectArmsWide(lm, state) {
+  const ls = lm[11], rs = lm[12], lw = lm[15], rw = lm[16], le = lm[13], re = lm[14];
+  if (!ls||!rs||!lw||!rw||!le||!re) return {feedback:'上半身が見えるよう離れてください', good:false};
+  if (ls.visibility<0.5||rs.visibility<0.5||lw.visibility<0.5||rw.visibility<0.5)
+    return {feedback:'両腕がカメラに映るよう正面を向いてください', good:false};
+  const armSpan = Math.abs(lw.x - rw.x);
+  const shoulderSpan = Math.abs(ls.x - rs.x);
+  const isWide = armSpan > shoulderSpan * 1.8;
+  // 手首が肩と同じ高さ±20%以内
+  const leftLevel = Math.abs(lw.y - ls.y) < 0.20;
+  const rightLevel = Math.abs(rw.y - rs.y) < 0.20;
+  // 手首が肩より下に垂れていないか（腕を上げている）
+  const notDown = lw.y < ls.y + 0.10 && rw.y < rs.y + 0.10;
+  const open = isWide && leftLevel && rightLevel && notDown;
+  if (open && !state.open) { state.open = true; return {feedback:'✓ Tの字に広げられています！下ろしてください', good:true, setState:state}; }
+  if (!open && state.open) { state.open = false; return {feedback:'もう一度！腕を横に広げてください', good:false, counted:true, setState:state}; }
+  if (open) return {feedback:'✓ Tの字に広げられています！下ろしてください', good:true};
+  return {feedback:'両腕を肩の高さでTの字に水平に広げてください', good:false};
+}
+
+function detectSideBend(lm, state) {
+  const ls = lm[11], rs = lm[12], lh = lm[23], rh = lm[24];
+  if (!ls||!rs||!lh||!rh) return {feedback:'全身が映るよう離れてください', good:false};
+  if (ls.visibility<0.4||rs.visibility<0.4) return {feedback:'上半身が映るよう調整してください', good:false};
+  // 肩の傾きで判定
+  const shoulderTilt = ls.y - rs.y;
+  const threshold = 0.08;
+  const tiltLeft = shoulderTilt > threshold;
+  const tiltRight = shoulderTilt < -threshold;
+  if (!state.side) state.side = 'none';
+  if (tiltLeft && state.side !== 'left') {
+    state.side = 'left';
+    if (state.lastSide === 'right') { return {feedback:'✓ 左に傾けました！右にも傾けてください', good:true, counted:true, setState:state}; }
+    state.lastSide = 'left';
+    return {feedback:'✓ 左に傾けています！右にも傾けてください', good:true, setState:state};
+  }
+  if (tiltRight && state.side !== 'right') {
+    state.side = 'right';
+    if (state.lastSide === 'left') { return {feedback:'✓ 右に傾けました！左にも傾けてください', good:true, counted:true, setState:state}; }
+    state.lastSide = 'right';
+    return {feedback:'✓ 右に傾けています！左にも傾けてください', good:true, setState:state};
+  }
+  if (tiltLeft||tiltRight) return {feedback:'✓ 傾けています！反対側にも傾けてください', good:true};
+  return {feedback:'体を左右どちらかに傾けてください', good:false};
+}
+
+function detectPushup(lm, state) {
+  // 足踏み検出：左右の膝を交互に上げる
+  const lh = lm[23], rh = lm[24], lk = lm[25], rk = lm[26];
+  if (!lh||!rh||!lk||!rk) return {feedback:'全身が映るようカメラから離れてください', good:false};
+  if (lh.visibility<0.4||rh.visibility<0.4||lk.visibility<0.4||rk.visibility<0.4)
+    return {feedback:'全身がカメラに映るよう調整してください', good:false};
+  const hipY = (lh.y + rh.y) / 2;
+  // 膝がヒップより上＝膝を上げている
+  const leftKneeUp = lk.y < lh.y - 0.05;
+  const rightKneeUp = rk.y < rh.y - 0.05;
+  if (!state.lastKnee) state.lastKnee = 'none';
+  if (leftKneeUp && !rightKneeUp && state.lastKnee !== 'left') {
+    state.lastKnee = 'left';
+    const counted = state.prevKnee === 'right';
+    state.prevKnee = 'left';
+    return {feedback:'✓ 左膝が上がっています！右も上げてください', good:true, counted, setState:state};
+  }
+  if (rightKneeUp && !leftKneeUp && state.lastKnee !== 'right') {
+    state.lastKnee = 'right';
+    const counted = state.prevKnee === 'left';
+    state.prevKnee = 'right';
+    return {feedback:'✓ 右膝が上がっています！左も上げてください', good:true, counted, setState:state};
+  }
+  if (leftKneeUp || rightKneeUp) return {feedback:'✓ 膝が上がっています！交互に続けてください', good:true};
+  return {feedback:'その場で足踏みしてください。膝を交互に上げてください', good:false};
+}
+
+const EXERCISES = [
+  { id:'arms_up', name:'両腕を頭上に上げる', emoji:'🙌', desc:'両腕を肩より高く上げて、下ろす動作を10回繰り返してください', detect:detectArmsUp },
+  { id:'squat', name:'スクワット', emoji:'🦵', desc:'膝を曲げて腰を落とし、立ち上がる動作を10回繰り返してください', detect:detectSquat },
+  { id:'arms_wide', name:'両腕を左右に広げる', emoji:'✈️', desc:'両腕をTの字に広げて、下ろす動作を10回繰り返してください', detect:detectArmsWide },
+  { id:'side_bend', name:'体を左右に傾ける', emoji:'↔️', desc:'体を左右交互に傾けてください。左右で1回とカウントします', detect:detectSideBend },
+  { id:'pushup', name:'腕立て伏せ', emoji:'💪', desc:'床に伏せて体を押し上げる動作を10回繰り返してください', detect:detectPushup }
+];
+
+// ── INIT ──
+let idleSeconds = 45 * 60;
+let idleTimer = null;
+
+function formatTime(s) { return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
+
+function pickExercise() {
+  currentExercise = EXERCISES[Math.floor(Math.random() * EXERCISES.length)];
+  exerciseState = {};
+  document.getElementById('locked-emoji').textContent = currentExercise.emoji;
+  document.getElementById('locked-name').textContent = currentExercise.name;
+  document.getElementById('locked-desc').textContent = currentExercise.desc;
+  document.getElementById('banner-emoji').textContent = currentExercise.emoji;
+  document.getElementById('banner-name').textContent = currentExercise.name;
+  document.getElementById('banner-desc').textContent = currentExercise.desc;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  pickExercise();
+  const idleDisplay = document.getElementById('idle-display');
+  idleTimer = setInterval(() => { idleSeconds++; idleDisplay.textContent = formatTime(idleSeconds); }, 1000);
+});
+
+function showScreen(id) {
+  ['locked-screen','camera-screen','unlocked-screen'].forEach(s => document.getElementById(s).style.display='none');
+  document.getElementById(id).style.display='flex';
+}
+
+async function startCamera() {
+  showScreen('camera-screen');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  const pose = new Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+  pose.setOptions({ modelComplexity:1, smoothLandmarks:true, enableSegmentation:false, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+
+  pose.onResults(results => {
+    if (!poseReady) { poseReady=true; document.getElementById('loading-overlay').style.display='none'; }
+    canvas.width = video.videoWidth || canvas.offsetWidth;
+    canvas.height = video.videoHeight || canvas.offsetHeight;
+    ctx.save(); ctx.clearRect(0,0,canvas.width,canvas.height);
+    if (results.poseLandmarks) {
+      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color:'rgba(184,255,79,0.4)',lineWidth:2});
+      drawLandmarks(ctx, results.poseLandmarks, {color:'#b8ff4f',lineWidth:1,radius:4});
+      processExercise(results.poseLandmarks);
+    } else {
+      setFeedback(false,'人物が検出できません。カメラに映るよう位置を調整してください');
+    }
+    ctx.restore();
+  });
+
+  camera = new Camera(video, { onFrame: async()=>{ await pose.send({image:video}); }, width:640, height:480 });
+  try { await camera.start(); } catch(e) { document.getElementById('loading-overlay').querySelector('.loading-text').textContent='カメラへのアクセスが拒否されました'; }
+}
+
+function processExercise(lm) {
+  const result = currentExercise.detect(lm, exerciseState);
+  if (result.setState) exerciseState = result.setState;
+  setFeedback(result.good, result.feedback);
+  if (result.counted) {
+    reps++;
+    updateReps();
+    if (reps >= TARGET_REPS) setTimeout(unlockApp, 600);
+  }
+}
+
+function setFeedback(good, text) {
+  const bar = document.getElementById('feedback-bar');
+  bar.className = 'feedback-bar ' + (good?'good':'bad');
+  document.getElementById('feedback-text').textContent = text;
+}
+
+function updateReps() {
+  document.getElementById('rep-display').textContent = `${reps} / ${TARGET_REPS} 回`;
+  document.getElementById('progress-label').textContent = `${reps} / ${TARGET_REPS}`;
+  document.getElementById('progress-fill').style.width = `${(reps/TARGET_REPS)*100}%`;
+}
+
+function unlockApp() {
+  if (camera) { try{camera.stop();}catch(e){} }
+  document.getElementById('unlock-msg').textContent = `「${currentExercise.name}」を10回完了しました。\n体を動かしてリフレッシュできましたか？\nまた長時間座り続けたらお知らせします。`;
+  showScreen('unlocked-screen');
+}
+
+function resetApp() {
+  reps=0; poseReady=false;
+  updateReps();
+  idleSeconds = 45*60;
+  pickExercise();
+  showScreen('locked-screen');
+}
+</script>
+</body>
+</html>
